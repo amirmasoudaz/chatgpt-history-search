@@ -1,0 +1,13 @@
+/.env
+/data/exported/chat.html
+/data/exported/conversations.json
+/data/exported/message_feedback.json
+/data/exported/model_comparisons.json
+/data/exported/shared_conversations.json
+/data/exported/user.json
+/data/cache/
+/data/logs/
+/data/processed/
+/.idea/
+/.vscode/
+/.git/
