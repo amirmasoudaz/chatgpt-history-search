@@ -28,6 +28,21 @@ chat_models = {
             "rpm": 5000,
         },
         "endpoint": "https://api.openai.com/v1/chat/completions"
+    },
+    "gpt-4o": {
+        "name": "gpt-4o",
+        "version": "2024-05-13",
+        "input_length": 128000,
+        "output_length": 8192,
+        "cost": {
+            "input": 0.005,
+            "output": 0.015,
+        },
+        "limits": {
+            "tpm": 600000,
+            "rpm": 5000,
+        },
+        "endpoint": "https://api.openai.com/v1/chat/completions"
     }
 }
 

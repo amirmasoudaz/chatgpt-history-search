@@ -9,7 +9,7 @@ from tabulate import tabulate
 
 from core import Core
 from utilities.helpers import justified_print
-from utilities.io import IOFiles
+from utilities.files import IOFiles
 
 
 class ChatGPTSearchEngine(Core):

@@ -10,7 +10,7 @@ import numpy as np
 from openai_client.core import Core
 
 
-class GPTClient(Core):
+class OpenAINative(Core):
     def __init__(
             self,
             cache_dir: str,
@@ -110,7 +110,7 @@ class GPTClient(Core):
 
             if status == 200:
                 output = content["choices"][0]["message"]["content"]
-                if response_format == "json_object":
+                if response_format == "json_object" and isinstance(output, str):
                     output = json.loads(output)
                 usage = self.calculator.calc_usage(content["usage"], self.chat_model)
                 await self.limit(model="chat", tokens=usage["output_tokens"], requests=0)

@@ -1,6 +1,6 @@
 import os
 
-from openai_client.client import GPTClient
+from openai_client.client import OpenAINative
 
 
 class Core:
@@ -78,7 +78,7 @@ class Core:
             if title != self.EXPORTED_DIR:
                 os.makedirs(path, exist_ok=True)
 
-        self.gpt_client = GPTClient(
+        self.gpt_client = OpenAINative(
             cache_dir=self.paths["dir"]["cache"],
             chat_model=self.CHAT_MODEL,
             embedding_model=self.EMBEDDING_MODEL

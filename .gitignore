@@ -1,4 +1,5 @@
 /.env
+/keys.env
 /data/exported/chat.html
 /data/exported/conversations.json
 /data/exported/message_feedback.json
