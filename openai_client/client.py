@@ -54,7 +54,7 @@ class OpenAINative(Core):
             if status == 200:
                 output = np.frombuffer(base64.b64decode(content["data"][0]["embedding"]), dtype="float32").tolist()
                 usage = self.calculator.calc_usage(content["usage"], self.embedding_model)
-            elif 500 <= response.status and attempts > 0:
+            elif (500 <= status or status == 429) and attempts > 0:
                 await asyncio.sleep(backoff_time)
                 return await self.get_embedding(
                     context=context,

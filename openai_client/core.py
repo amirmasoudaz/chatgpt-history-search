@@ -7,7 +7,7 @@ from dotenv import find_dotenv, load_dotenv
 from openai_client.calculator import TokenCalculator
 from openai_client.limiter import TokenBucket
 from openai_client.models import chat_models, embedding_models
-from utilities.files import IOFiles
+from utilities.files import FileTools
 
 
 class Core:
@@ -27,11 +27,14 @@ class Core:
                 "requests": TokenBucket(size=self.embedding_model["limits"]["rpm"])
             }
         }
-
+        self.file_tools = FileTools()
         self.calculator = TokenCalculator()
 
         _ = load_dotenv(find_dotenv("keys.env"))
-        self._headers = {"Authorization": f"Bearer {os.getenv("OPENAI_API_KEY")}"}
+        api_key = os.getenv("OPENAI_API_KEY")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY not found in keys.env")
+        self._headers = {"Authorization": f"Bearer {api_key}"}
 
         self._session = None
         self._req_pool = []
@@ -51,8 +54,8 @@ class Core:
     async def save_cache(self, result) -> None:
         try:
             output_path = os.path.join(self.cache_dir, f"{result['identifier']}.json")
-            await IOFiles.write_json_async(output_path, result, indent=4)
+            await self.file_tools.write_json_async(path=output_path, data=result, indent=4)
         except Exception as e:
             print(f"Error: {e} on {result['identifier']}")
             output_path = os.path.join(self.cache_dir, f"{result['identifier']} - error.txt")
-            await IOFiles.write_file_async(output_path, str(result))
+            await self.file_tools.write_file_async(path=output_path, data=str(result))

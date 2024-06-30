@@ -2,26 +2,37 @@ import os
 
 from openai_client.client import OpenAINative
 
+from utilities.files import FileTools
+
 
 class Core:
     DATA_DIR = "data"
 
     EXPORTED_DIR = "exported"
     PROCESSED_DIR = "processed"
-    CACHE_DIR = "cache"
-    LOG_DIR = "logs"
+    VECTOR_CACHE_DIR = "vector_cache"
+    SEARCH_CACHE_DIR = "search_cache"
 
     EXPORTED_FILE = "conversations.json"
     INDEX_FILE = "index.json"
-    CACHE_FILE = "cache.json"
-    VECTOR_FILE = "vector.pkl"
+    MSG_CACHE_FILE = "msg_cache.json"
+    VECTOR_CACHE_FILE = "vector_cache.json"
+    VECTOR_DATA_FILE = "vector_data.pkl"
+    DIGESTION_INFO_FILE = "digestion_info.json"
 
     """
     CHAT_MODEL:
     The GPT model to use for chat continuation (turbo models)
-    Options: "gpt-3.5", "gpt-4"
+    Options: "gpt-3.5", "gpt-4o", "gpt-4"
     """
-    CHAT_MODEL = "gpt-3.5"
+    CHAT_MODEL = "gpt-4o"
+
+    """
+    TEMPERATURE:
+    The temperature to use for chat continuation
+    Range: 0.0 - 2.0
+    """
+    CHAT_TEMPERATURE = 0.0
 
     """
     EMBEDDING_MODEL:
@@ -62,16 +73,17 @@ class Core:
             "dir": {
                 "exported": os.path.join(data_dir, self.EXPORTED_DIR),
                 "processed": os.path.join(data_dir, self.PROCESSED_DIR),
-                "cache": os.path.join(data_dir, self.CACHE_DIR),
-                "logs": os.path.join(data_dir, self.LOG_DIR)
+                "vector_cache": os.path.join(data_dir, self.VECTOR_CACHE_DIR),
+                "search_cache": os.path.join(data_dir, self.SEARCH_CACHE_DIR)
             }
         }
         self.paths["file"] = {
             "exported": os.path.join(self.paths["dir"]["exported"], self.EXPORTED_FILE),
             "index": os.path.join(self.paths["dir"]["processed"], self.INDEX_FILE),
-            "cache": os.path.join(self.paths["dir"]["processed"], self.CACHE_FILE),
-            "vector": os.path.join(self.paths["dir"]["processed"], self.VECTOR_FILE),
-
+            "msg_cache": os.path.join(self.paths["dir"]["processed"], self.MSG_CACHE_FILE),
+            "vector_cache": os.path.join(self.paths["dir"]["processed"], self.VECTOR_CACHE_FILE),
+            "vector_data": os.path.join(self.paths["dir"]["processed"], self.VECTOR_DATA_FILE),
+            "digestion_info": os.path.join(data_dir, self.DIGESTION_INFO_FILE)
         }
 
         for title, path in self.paths["dir"].items():
@@ -79,14 +91,16 @@ class Core:
                 os.makedirs(path, exist_ok=True)
 
         self.gpt_client = OpenAINative(
-            cache_dir=self.paths["dir"]["cache"],
+            cache_dir=self.paths["dir"]["vector_cache"],
             chat_model=self.CHAT_MODEL,
             embedding_model=self.EMBEDDING_MODEL
         )
+        self.file_tools = FileTools()
 
-        self.exported = []
-        self.index = {}
-        self.cache = {}
+        self.digestion_info = {
+            "to_ignore": [],
+        }
+        self.indexed_data = {}
         self.vector_cache = {}
         self.search_cache = {}
-        self.vector = None
+        self.vector_data = None

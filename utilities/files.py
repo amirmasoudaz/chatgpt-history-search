@@ -6,14 +6,19 @@ import aiofiles
 import pandas as pd
 
 
-class IOFiles:
-    @staticmethod
-    def read_dir_contents(path: str, dtype: str = "json") -> dict:
+class FileTools:
+    def __init__(self, max_concurrent_files=100):
+        self.semaphore = asyncio.Semaphore(max_concurrent_files)
+
+    def read_dir_contents(self, path: str, dtype: str = "json", default=None) -> dict:
         """
         Read all files in a directory with a specific dtype
-        :param path:  Path to the directory
-        :param dtype:  Data type of the files to read  (json, txt, csv, etc.)
-        :return:  Dictionary of file contents with file name (without the dtype) as key and content as value
+
+        :param path: Path to the directory
+        :param dtype: Data type of the files to read  (json, txt, csv, etc.)
+        :param default: Default value to return if file is not found
+
+        :return: Dictionary of file contents with file name (without the dtype) as key and content as value
         """
 
         contents = {}
@@ -23,21 +28,23 @@ class IOFiles:
                     ident = file.replace(f".{dtype}", "")
 
                     if dtype == "json":
-                        contents[ident] = IOFiles.read_json(os.path.join(path, file))
-                    elif dtype in ["csv", "xlsx", "pickle"]:
-                        contents[ident] = IOFiles.read_df(os.path.join(path, file), dtype)
+                        contents[ident] = self.read_json(os.path.join(path, file), default=default)
+                    elif dtype in ["csv", "xlsx", "pkl"]:
+                        contents[ident] = self.read_df(os.path.join(path, file), dtype, default=default)
                     else:
-                        contents[ident] = IOFiles.read_file(os.path.join(path, file))
+                        contents[ident] = self.read_file(os.path.join(path, file), default=default)
 
         return contents
 
-    @staticmethod
-    async def read_dir_contents_async(path: str, dtype: str = "json") -> dict:
+    async def read_dir_contents_async(self, path: str, dtype: str = "json", default=None) -> dict:
         """
         Read all files in a directory with a specific dtype asynchronously
-        :param path:  Path to the directory
-        :param dtype:  Data type of the files to read  (json, txt, etc.) [NOT SUPPORTED FOR DATAFRAMES]
-        :return:  Dictionary of file contents with file name (without the dtype) as key and content as value
+
+        :param path: Path to the directory
+        :param dtype: Data type of the files to read  (json, txt, etc.) [NOT SUPPORTED FOR DATAFRAMES]
+        :param default: Default value to return if file is not found
+
+        :return: Dictionary of file contents with file name (without the dtype) as key and content as value
         """
 
         tasks, idents = [], []
@@ -47,23 +54,24 @@ class IOFiles:
                     idents.append(file.replace(f".{dtype}", "") if dtype != "all" else file)
 
                     if dtype == "json":
-                        tasks.append(IOFiles.read_json_async(os.path.join(path, file)))
+                        tasks.append(self.read_json_async(os.path.join(path, file), default=default))
                     else:
-                        tasks.append(IOFiles.read_file_async(os.path.join(path, file)))
+                        tasks.append(self.read_file_async(os.path.join(path, file), default=default))
 
         results = await asyncio.gather(*tasks)
         contents = {ident: content for ident, content in zip(idents, results)}
 
         return contents
 
-    @staticmethod
-    def write_contents_to_dir(path: str, contents: dict, dtype: str) -> None:
+    def write_contents_to_dir(self, path: str, contents: dict, dtype: str) -> None:
         """
         Write contents to a directory with a specific dtype
-        :param path:  Path to the directory
-        :param contents:  Dictionary of file contents with file name as key and content as value
-        :param dtype:  Data type of the files to write  (json, txt, csv, etc.)
-        :return:  None
+
+        :param path: Path to the directory
+        :param contents: Dictionary of file contents with file name as key and content as value
+        :param dtype: Data type of the files to write  (json, txt, csv, etc.)
+
+        :return: None
         """
 
         if not os.path.exists(path):
@@ -72,20 +80,21 @@ class IOFiles:
         for ident, content in contents.items():
             file_path = os.path.join(path, f"{ident}.{dtype}")
             if dtype == "json":
-                IOFiles.write_json(file_path, content)
-            elif dtype in ["csv", "xlsx", "pickle"]:
-                IOFiles.write_df(file_path, content, dtype)
+                self.write_json(file_path, content)
+            elif dtype in ["csv", "xlsx", "pkl"]:
+                self.write_df(file_path, content, dtype)
             else:
-                IOFiles.write_file(file_path, content)
+                self.write_file(file_path, content)
 
-    @staticmethod
-    async def write_contents_to_dir_async(path: str, contents: dict, dtype: str) -> None:
+    async def write_contents_to_dir_async(self, path: str, contents: dict, dtype: str) -> None:
         """
         Write contents to a directory with a specific dtype asynchronously
-        :param path:  Path to the directory
-        :param contents:  Dictionary of file contents with file name as key and content as value
-        :param dtype:  Data type of the files to write  (json, txt, etc.) [NOT SUPPORTED FOR DATAFRAMES]
-        :return:  None
+
+        :param path: Path to the directory
+        :param contents: Dictionary of file contents with file name as key and content as value
+        :param dtype: Data type of the files to write  (json, txt, etc.) [NOT SUPPORTED FOR DATAFRAMES]
+
+        :return: None
         """
 
         if not os.path.exists(path):
@@ -95,36 +104,38 @@ class IOFiles:
         for ident, content in contents.items():
             file_path = os.path.join(path, f"{ident}.{dtype}")
             if dtype == "json":
-                tasks.append(IOFiles.write_json_async(file_path, content))
+                tasks.append(self.write_json_async(file_path, content))
             else:
-                tasks.append(IOFiles.write_file_async(file_path, content))
+                tasks.append(self.write_file_async(file_path, content))
 
         await asyncio.gather(*tasks)
 
-    @staticmethod
-    def read_file(path: str) -> str:
+    def read_file(self, path: str, default=None) -> str:
         """
         Read a file
-        :param path:  Path to the file
-        :return:  File content
+
+        :param path: Path to the file
+        :param default: Default value to return if file is not found
+
+        :return: content
         """
 
         try:
             with open(path, "r") as file:
                 return file.read()
         except FileNotFoundError:
-            print(f"File not found: {path}")
-        except Exception as e:
-            print(f"Error Reading File: {e}")
+            self.write_file(path, data="" if default is None else default)
 
-        return ""
+        return default
 
     @staticmethod
     def write_file(path: str, data: str) -> None:
         """
         Write data to a file
-        :param path:  Path to the file
-        :param data:  Data to write
+
+        :param path: Path to the file
+        :param data: Data to write
+
         :return: None
         """
 
@@ -134,65 +145,73 @@ class IOFiles:
         except Exception as e:
             print(f"Error Writing File: {e}")
 
-    @staticmethod
-    async def read_file_async(path: str) -> str:
+    async def read_file_async(self, path: str, default=None) -> str:
         """
         Read a file asynchronously
-        :param path:  Path to the file
-        :return:  File content
+
+        :param path: Path to the file
+        :param default: Default value to return if file is not found
+
+        :return: content
         """
 
-        try:
-            async with aiofiles.open(path, "r") as file:
-                return await file.read()
-        except FileNotFoundError:
-            print(f"File not found: {path}")
-        except Exception as e:
-            print(f"Error Reading File: {e}")
+        async with self.semaphore:
+            try:
+                async with aiofiles.open(path, "r") as file:
+                    return await file.read()
+            except FileNotFoundError:
+                pass
+            except Exception as e:
+                print(f"Error Reading File: {e}")
 
-        return ""
+            return default
 
-    @staticmethod
-    async def write_file_async(path: str, data: str) -> None:
+    async def write_file_async(self, path: str, data: str) -> None:
         """
         Write data to a file asynchronously
-        :param path:  Path to the file
-        :param data:  Data to write
-        :return:  None
+
+        :param path: Path to the file
+        :param data: Data to write
+
+        :return: None
         """
 
-        try:
-            async with aiofiles.open(path, "w") as file:
-                await file.write(data)
-        except Exception as e:
-            print(f"Error Writing File: {e}")
+        async with self.semaphore:
+            try:
+                async with aiofiles.open(path, "w") as file:
+                    await file.write(data)
+            except Exception as e:
+                print(f"Error Writing File: {e}")
 
-    @staticmethod
-    def read_json(path: str) -> dict:
+    def read_json(self, path: str, default: dict or list = None) -> dict or list:
         """
         Read a JSON file
-        :param path:  Path to the JSON file
-        :return:  JSON data
+
+        :param path: Path to the JSON file
+        :param default: Default value to return if file is not found or corrupted
+
+        :return: JSON data
         """
 
         try:
             with open(path, "r") as file:
                 return json.load(file)
-        except FileNotFoundError:
-            print(f"File not found: {path}")
-        except json.JSONDecodeError:
-            print(f"File is corrupted: {path}")
+        except (FileNotFoundError, json.JSONDecodeError):
+            default = {} if default is None else default
+            self.write_json(path, default, indent=4)
 
-        return {}
+        return default
 
     @staticmethod
-    def write_json(path: str, data: dict, indent: int = 4) -> None:
+    def write_json(path: str, data: list or dict, indent: int = 4) -> None:
         """
         Write data to a JSON file
-        :param path:  Path to the JSON file
-        :param data:  Data to write
-        :param indent:  Indentation level
-        :return:  None
+
+        :param path: Path to the JSON file
+        :param data: Data to write
+        :param indent: Indentation level
+
+        :return: None
         """
         if not path.endswith(".json"):
             path += ".json"
@@ -203,81 +222,90 @@ class IOFiles:
         except Exception as e:
             print(f"Error Writing JSON: {e}")
 
-    @staticmethod
-    async def read_json_async(path: str) -> dict:
+    async def read_json_async(self, path: str, default: dict or list = None) -> dict or list:
         """
         Read a JSON file asynchronously
-        :param path:  Path to the JSON file
-        :return:  JSON data
+
+        :param path: Path to the JSON file
+        :param default: Default value to return if file is not found or corrupted
+
+        :return: JSON data
         """
 
-        try:
-            async with aiofiles.open(path, "r") as file:
-                return json.loads(await file.read())
-        except FileNotFoundError:
-            print(f"File not found: {path}")
-        except json.JSONDecodeError:
-            print(f"File is corrupted: {path}")
+        async with self.semaphore:
+            try:
+                async with aiofiles.open(path, "r") as file:
+                    return json.loads(await file.read())
+            except (FileNotFoundError, json.JSONDecodeError):
+                default = {} if default is None else default
+                await self.write_json_async(path, default, indent=4)
 
-        return {}
+            return default
 
-    @staticmethod
-    async def write_json_async(path: str, data: dict, indent: int = 4) -> None:
+    async def write_json_async(self, path: str, data: dict, indent: int = 4) -> None:
         """
         Write data to a JSON file asynchronously
-        :param path:  Path to the JSON file
-        :param data:  Data to write
-        :param indent:  Indentation level
-        :return:  None
+
+        :param path: Path to the JSON file
+        :param data: Data to write
+        :param indent: Indentation level
+
+        :return: None
         """
         if not path.endswith(".json"):
             path += ".json"
 
-        try:
-            async with aiofiles.open(path, "w") as file:
-                await file.write(json.dumps(data, indent=indent))
-        except Exception as e:
-            print(f"Error Writing JSON: {e}")
+        async with self.semaphore:
+            try:
+                async with aiofiles.open(path, "w") as file:
+                    await file.write(json.dumps(data, indent=indent))
+            except Exception as e:
+                print(f"Error Writing JSON: {e}")
 
     @staticmethod
-    def read_df(path: str, dtype: str = "csv") -> pd.DataFrame:
+    def read_df(path: str, dtype: str = "csv", default=None) -> pd.DataFrame:
         """
         Read a dataframe from a file
-        :param path:  Path to the file
-        :param dtype:  Data type of the file  (csv, pickle, xlsx)
-        :return:  Pandas DataFrame
+
+        :param path: Path to the file
+        :param dtype: Data type of the file  (csv, pkl, xlsx)
+        :param default: Default value to return if file is not found
+
+        :return: Pandas DataFrame
         """
 
         try:
             if dtype == "csv":
                 return pd.read_csv(path)
-            elif dtype == "pickle":
+            elif dtype == "pkl":
                 return pd.read_pickle(path)
             elif dtype == "xlsx":
                 return pd.read_excel(path)
             else:
                 raise ValueError(f"Invalid Dataframe dtype: {dtype}")
         except FileNotFoundError:
-            print(f"File not found: {path}")
+            pass
         except Exception as e:
             print(f"Error: {e}")
 
-        return pd.DataFrame()
+        return default
 
     @staticmethod
     def write_df(path: str, data: pd.DataFrame, dtype: str = "csv") -> None:
         """
         Write a dataframe to a file
-        :param path:  Path to the file
-        :param data:  Pandas DataFrame
-        :param dtype:  Data type of the file  (csv, pickle, xlsx)
-        :return:  None
+
+        :param path: Path to the file
+        :param data: Pandas DataFrame
+        :param dtype: Data type of the file  (csv, pkl, xlsx)
+
+        :return: None
         """
 
         try:
             if dtype == "csv":
                 data.to_csv(path, index=False)
-            elif dtype == "pickle":
+            elif dtype == "pkl":
                 data.to_pickle(path)
             elif dtype == "xlsx":
                 data.to_excel(path, index=False)

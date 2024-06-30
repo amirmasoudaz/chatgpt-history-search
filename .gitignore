@@ -6,9 +6,10 @@
 /data/exported/model_comparisons.json
 /data/exported/shared_conversations.json
 /data/exported/user.json
-/data/cache/
-/data/logs/
+/data/vector_cache/
+/data/search_cache/
 /data/processed/
+/data/digestion_info.json
 /.idea/
 /.vscode/
 /.git/

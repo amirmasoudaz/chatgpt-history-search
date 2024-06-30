@@ -9,7 +9,6 @@ from tabulate import tabulate
 
 from core import Core
 from utilities.helpers import justified_print
-from utilities.files import IOFiles
 
 
 class ChatGPTSearchEngine(Core):
@@ -20,32 +19,7 @@ class ChatGPTSearchEngine(Core):
     def generate_hash(text):
         return hashlib.sha256(text.encode('utf-8')).hexdigest()
 
-    def load_data(self, update_db=False):
-        if not os.path.exists(self.paths["file"]["index"]):
-            update_db = True  # Force Update
-
-        self.index = IOFiles.read_json(self.paths["file"]["index"])
-        self.vector = IOFiles.read_df(self.paths["file"]["vector"], dtype="pickle")
-        self.search_cache = IOFiles.read_dir_contents(self.paths["dir"]["logs"], dtype="json")
-
-        if update_db:
-            self.exported = IOFiles.read_json(self.paths["file"]["exported"])
-            if not self.exported:
-                raise FileNotFoundError(f"- Exported JSON File Not Found - Path: {self.paths["file"]["exported"]}")
-
-            self.cache = IOFiles.read_json(self.paths["file"]["cache"])
-            self.vector_cache = IOFiles.read_dir_contents(self.paths["dir"]["cache"], dtype="json")
-
-    def save_data(self):
-        print(f"- Saving Processed Data -", end=" ")
-
-        IOFiles.write_json(self.paths["file"]["index"], self.index)
-        IOFiles.write_json(self.paths["file"]["cache"], self.cache)
-        IOFiles.write_df(self.paths["file"]["vector"], self.vector, dtype="pickle")
-
-        print(f"Done -")
-
-    def prepare_conversations(self):
+    async def prepare_conversations(self, updates, exported):
         def get_content():
             content = message["content"]
             content_type = content["content_type"]
@@ -114,12 +88,18 @@ class ChatGPTSearchEngine(Core):
                 print(f"Error processing text: {e}")
                 return [message_content]
 
-        for idx, conversation in enumerate(self.exported[::-1]):
-            title = ' '.join(conversation.get("title", "").split())
-            title = f"Chat {idx + 1} - {title}" if title else f"Chat {idx + 1}"
+        msg_cache = await self.file_tools.read_json_async(self.paths["file"]["msg_cache"], default={})
+        for conversation in exported[::-1]:
+            conversation_id = conversation.get("conversation_id")
+            if not conversation_id:
+                continue
 
-            created_at = datetime.fromtimestamp(conversation.get("create_time", 0)).strftime("%Y-%m-%d %H:%M:%S")
-            conversation_id = conversation.get("conversation_id", "")
+            if conversation_id not in updates:
+                continue
+
+            conversation_title = ' '.join(conversation.get("title", "").split())
+            if not conversation_title:
+                conversation_title = f"Untitled Chat"
 
             messages = []
             for message in conversation["mapping"].values():
@@ -142,12 +122,12 @@ class ChatGPTSearchEngine(Core):
 
                 for msg in message_segments:
                     msg_hash = self.generate_hash(msg)
-                    if msg_hash not in self.cache:
-                        self.cache[msg_hash] = {
-                            "content": msg, "addresses": [[title, len(messages)]]
+                    if not msg_cache.get(msg_hash):
+                        msg_cache[msg_hash] = {
+                            "content": msg, "addresses": [[conversation_id, len(messages)]]
                         }
-                    elif [title, len(messages)] not in self.cache[msg_hash]["addresses"]:
-                        self.cache[msg_hash]["addresses"].append([title, len(messages)])
+                    elif [conversation_id, len(messages)] not in msg_cache[msg_hash]["addresses"]:
+                        msg_cache[msg_hash]["addresses"].append([conversation_id, len(messages)])
 
                 model = message["metadata"].get("model_slug", "gpt") if role == "assistant" else "user"
                 messaged_at = datetime.fromtimestamp(message["create_time"]).strftime("%Y-%m-%d %H:%M:%S")
@@ -159,30 +139,41 @@ class ChatGPTSearchEngine(Core):
                     "metadata": {
                         "model": model,
                         "created_at": messaged_at,
-                        "conversation_id": conversation_id,
                         "message_index": len(messages),
-                        "conversation_title": title,
+                        "conversation_id": conversation_id,
+                        "conversation_title": conversation_title,
                     }
                 })
 
             if not messages:
+                self.digestion_info["to_ignore"].append(conversation_id)
                 continue
 
-            self.index[title] = {
+            total_raw_messages = len(conversation["mapping"].values())
+            created_at = datetime.fromtimestamp(conversation.get("create_time", 0)).strftime("%Y-%m-%d %H:%M:%S")
+            conversation_url = "https://chatgpt.com/c/" + conversation_id
+            self.indexed_data[conversation_id] = {
                 "messages": messages,
                 "created_at": created_at,
                 "conversation_id": conversation_id,
-                "URL": "https://chatgpt.com/c/" + conversation_id
+                "conversation_title": conversation_title,
+                "total_processed_messages": len(messages),
+                "total_raw_messages": total_raw_messages,
+                "conversation_url": conversation_url
             }
 
-    async def generate_embeddings(self):
+        print(f"Total Chats: {len(self.indexed_data)} - Total Msg Chunks: {len(msg_cache)} -")
+        return msg_cache
+
+    async def generate_embeddings(self, msg_cache):
         tokens = []
-        for msg_hash, msg in self.cache.items():
+        vector_cache = await self.file_tools.read_json_async(self.paths["file"]["vector_cache"], default={})
+        for msg_hash, msg in msg_cache.items():
             if msg.get("embedding"):
                 continue
             else:
-                if msg_hash in self.vector_cache:
-                    msg["embedding"] = self.vector_cache[msg_hash]["output"]
+                if vector_cache.get(msg_hash) and vector_cache[msg_hash].get("output"):
+                    msg["embedding"] = vector_cache[msg_hash]["output"]
                 else:
                     self.gpt_client.add_request(
                         context=msg["content"],
@@ -190,37 +181,30 @@ class ChatGPTSearchEngine(Core):
                         engine="embedding")
                     tokens.append(self.gpt_client.calculator.count_tokens(msg["content"]))
 
-        print(f"- {len(self.index)} Conversations - {len(self.cache)} Rows -", end=" ")
-
         if not tokens:
-            print(f"Up-to-Date")
-            return
+            print(f"- No New API Calls Required - Data Already Cached -")
+        else:
+            print(f"- New API Calls: {len(tokens)} - Tokens: {sum(tokens)} -", end=" ")
+            print(f"Cost: ${round(sum(tokens) / 1000 * self.gpt_client.embedding_model['cost']['input'], 4)} -", end=" ")
+            print(f"Model: {self.gpt_client.embedding_model['name']} -", end=" ")
+            results = await self.gpt_client.trigger_requests()
+            print("Fetched Successfully -")
 
-        print(f"{len(tokens)} API Calls - {sum(tokens)} Tokens -", end=" ")
-        cost = round(sum(tokens) / 1000 * self.gpt_client.embedding_model['cost']['input'], 4)
-        print(f"API Cost: ${cost} -")
+            if results:
+                for result in results:
+                    if result["output"]:
+                        msg_cache[result["identifier"]]["embedding"] = result["output"]
+                        os.remove(os.path.join(self.paths["dir"]["vector_cache"], f"{result['identifier']}.json"))
+                        vector_cache[result["identifier"]] = result
+                    else:
+                        print(f"- Failed to Embed: {result['identifier']}")
 
-        if input("- Proceed With Fetching Text Embeddings? (y/n): ").lower() != "y":
-            print("- Aborted!")
-            return
+        return pd.DataFrame([
+            {"hash": msg_hash, **msg}
+            for msg_hash, msg in msg_cache.items()
+        ]), vector_cache
 
-        print("- Fetching Text Embeddings - ", end=" ")
-        results = await self.gpt_client.trigger_requests()
-        print("Done -")
-
-        if results:
-            for result in results:
-                if result["output"]:
-                    self.cache[result["identifier"]]["embedding"] = result["output"]
-                else:
-                    print(f"- Failed to Embed: {result['identifier']}")
-
-            self.vector = pd.DataFrame([
-                {"hash": msg_hash, **msg}
-                for msg_hash, msg in self.cache.items()
-            ])
-
-    async def search(self, query, identifier):
+    async def search(self, query, identifier, limit):
         if identifier in self.search_cache:
             return self.search_cache[identifier]
 
@@ -231,7 +215,7 @@ class ChatGPTSearchEngine(Core):
 
         data = [
             (row["addresses"], row["hash"], 1 - cosine_similarity(result["output"], row["embedding"]))
-            for i, row in self.vector.iterrows()
+            for i, row in self.vector_data.iterrows()
         ]
 
         self.search_cache[identifier] = result
@@ -242,86 +226,121 @@ class ChatGPTSearchEngine(Core):
             for address in addresses:
                 if address[0] not in result_addresses:
                     result_addresses.append(address[0])
-            if len(result_addresses) >= self.SEARCH_LIMIT:
+            if len(result_addresses) >= limit:
                 break
 
-        self.search_cache[identifier]["results"] = result_addresses[:self.SEARCH_LIMIT]
-        file_path = os.path.join(self.paths["dir"]["logs"], f"{identifier}.json")
-        IOFiles.write_json(file_path, self.search_cache[identifier])
+        self.search_cache[identifier]["results"] = result_addresses[:limit]
+        file_path = os.path.join(self.paths["dir"]["search_cache"], f"{identifier}.json")
+        self.file_tools.write_json(file_path, self.search_cache[identifier])
 
         return self.search_cache[identifier]
 
     async def prep_logic(self):
-        print("- Processing Exported Messages -")
-        self.prepare_conversations()
-        await self.generate_embeddings()
-        self.save_data()
-        print("- Exported Messages Processed -")
+        self.digestion_info = await self.file_tools.read_json_async(self.paths["file"]["digestion_info"], default=self.digestion_info)
+        self.indexed_data = await self.file_tools.read_json_async(self.paths["file"]["index"], default=self.indexed_data)
+        self.vector_data = self.file_tools.read_df(self.paths["file"]["vector_data"], dtype="pkl", default=self.vector_data)
+        self.search_cache = await self.file_tools.read_dir_contents_async(self.paths["dir"]["search_cache"], dtype="json", default=self.search_cache)
+
+        exported = await self.file_tools.read_json_async(self.paths["file"]["exported"], default={})
+        if not self.indexed_data and not exported:
+            raise FileNotFoundError(f"- Exported JSON File Not Found - Path: {self.paths["file"]["exported"]}")
+
+        updates = []
+        for conversation in exported:
+            conversation_id = conversation.get("conversation_id")
+            if not conversation_id or conversation_id in self.digestion_info["to_ignore"]:
+                continue
+
+            if not self.indexed_data.get(conversation_id):
+                updates.append(conversation_id)
+            else:
+                total_raw_messages = len(conversation["mapping"].values())
+                if self.indexed_data[conversation_id]["total_raw_messages"] != total_raw_messages:
+                    updates.append(conversation_id)
+
+        if updates:
+            print(f"- Processing Exported Chats - New Chats: {len(updates)} -", end=" ")
+            msg_cache = await self.prepare_conversations(updates, exported)
+            self.vector_data, vector_cache = await self.generate_embeddings(msg_cache=msg_cache)
+
+            print(f"- Finalizing and Storing Processed Data -", end=" ")
+            self.file_tools.write_json(self.paths["file"]["index"], self.indexed_data)
+            self.file_tools.write_json(self.paths["file"]["msg_cache"], msg_cache)
+            self.file_tools.write_json(self.paths["file"]["vector_cache"], vector_cache)
+            self.file_tools.write_df(self.paths["file"]["vector_data"], self.vector_data, dtype="pkl")
+            self.file_tools.write_json(self.paths["file"]["digestion_info"], self.digestion_info)
+            print(f"Done -")
 
     async def chat_logic(self, results, result_index, identifier):
         conversation_title = results["results"][result_index - 1]
-        context = self.index[conversation_title].copy()
-        context_str = f"\nChat Title: {conversation_title}\n\n"
+        context = self.indexed_data[conversation_title].copy()
+        context_str = ""
         context_list = []
         for message in context["messages"]:
             if message["context"]["role"] != "user":
                 message["context"]["role"] = "assistant"
             context_str += f"- {message['context']['role'].title()}: {message['context']['content']}\n\n-----\n\n"
             context_list.append(message['context'])
+
+        token_count = self.gpt_client.calculator.count_tokens(context_list)
+        cost = round(token_count / 1000 * self.gpt_client.chat_model['cost']['input'], 4)
+        print(f"\n\n- {context["conversation_title"]} -")
+        print(f"- Length: {len(context['messages'])} Messages - Length: {token_count} Tokens -")
+        print(f"- API Input Cost: ~${cost}+ Per Prompt Using {self.gpt_client.chat_model['name']} Model -")
+        print(f"- ChatGPT URL: {context['conversation_url']} -\n\n")
         justified_print(context_str[:-1])
 
         while True:
-            user_query = input("\n- User (0 to Exit): ")
+            user_query = input("- User (0 to Return): ")
             if user_query == "0":
                 break
             context_list.append({"role": "user", "content": user_query})
 
-            token_count = self.gpt_client.calculator.count_tokens(context_list)
-            cost = round(token_count / 1000 * self.gpt_client.chat_model['cost']['input'], 4)
-            if input(f"- Context Has {token_count} Tokens - API Input Cost: ~${cost} - Proceed? (y/n): ").lower() != "y":
-                print("- Aborted!")
-                break
-
-            # Add token streaming
             response = await self.gpt_client.call_model(
+                engine="chat",
                 context=context_list,
                 identifier=identifier,
-                engine="chat")
+                temperature=self.CHAT_TEMPERATURE)
 
             context_list.append({"role": "assistant", "content": response["output"]})
             justified_print(f"\n-----\n\n- Assistant: {response["output"]}")
-            self.index[conversation_title]["messages"].extend([context_list[-2], context_list[-1]])
+            self.indexed_data[conversation_title]["messages"].extend([context_list[-2], context_list[-1]])
 
         # Add the new messages into the index and generate embeddings
-        IOFiles.write_json(self.paths["file"]["index"], self.index)
+        self.file_tools.write_json(self.paths["file"]["index"], self.indexed_data)
 
     async def search_logic(self):
-        self.gpt_client.cache_dir = self.paths["dir"]["logs"]
+        self.gpt_client.cache_dir = self.paths["dir"]["search_cache"]
 
         while True:
             query = input("- Search Query (0 to Exit): ")
             if query == "0":
                 break
+            try:
+                page_size = int(input("- Page Size (Default: 10): ") or self.SEARCH_LIMIT)
+            except ValueError:
+                page_size = self.SEARCH_LIMIT
 
             identifier = self.generate_hash(query)
-            results = await self.search(query, identifier)
+            results = await self.search(query, identifier, limit=page_size)
 
-            print(f"- Search Results for {query}:")
+            print(f"- Search Results for '{query}':")
             table = []
-            for i, address in enumerate(results["results"]):
-                table.append([i + 1, address, self.index[address]["URL"], self.index[address]["created_at"]])
-            print(tabulate(table, headers=["INDEX", "TITLE", "URL", "CREATED AT"], tablefmt="grid"))
+            for i, address in enumerate(results["results"], start=1):
+                info = self.indexed_data[address]
+                table.append([i, info["conversation_title"], info["created_at"], info["conversation_url"]])
+                if i >= page_size:
+                    break
+            print(tabulate(table, headers=["INDEX", "TITLE", "CREATED AT", "URL"], tablefmt="grid"))
 
-            result_index = int(input("- Index to Continue With (0 to Exit): "))
+            result_index = int(input("\n- Index to Continue Chat With (0 to Return): "))
             if result_index == 0:
                 continue
             else:
                 await self.chat_logic(results, result_index, identifier)
 
-    async def main(self, update_database=False):
-        self.load_data(update_database)
-        if update_database:
-            await self.prep_logic()
+    async def main(self):
+        await self.prep_logic()
         await self.search_logic()
 
 

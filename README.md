@@ -31,42 +31,60 @@ This Python project creates a search engine for OpenAI's ChatGPT conversation hi
      ```bash
      python main.py
      ```
-   - On the first run, the program will reformat `conversations.json`, prepare messages for text embeddings, and prompt you to generate all embeddings. After indexing, these embeddings are stored for future use.
-   - To update the chat history with a new `conversations.json`, replace the old one and set the `update_db` parameter to True when running the program. Setting it to False after updates can help avoid unnecessary background processing and potential performance degradation.
+   - On the first run, the program will reformat `conversations.json` and prepare messages for text embeddings.
+   ```bash
+   - Processing Exported Chats - New Chats: 1632 - Total Chats: 1620 - Total Msg Chunks: 17495 -
+   ```
+   - Then it will notify you of generating all embeddings.
+    ```bash
+   - New API Calls: 17495 - Tokens: 9219971 - Cost: $1.1986 - Model: text-embedding-3-large - Fetched Successfully -
+    ```
+   - After indexing, these embeddings are stored for future use.
+   ```bash
+   - Finalizing and Storing Processed Data - Done -
+   ```
+   - To update the chat history with a new `conversations.json`, simply replace the old one and rerun the program. New messages will be processed and indexed accordingly.
 
 ## Using the Search Results
 
 After executing a search, you'll receive a list of chat results with their titles, URLs, and creation dates. You can either:
 
-- Continue the conversation using the ChatGPT API in the Python console. Follow the interactive prompts to input your query and receive responses.
 - Use the provided URLs to view and continue the conversation directly on the ChatGPT website.
+- Continue the conversation using the Chat Completions API. Enter your prompt and receive responses. You can adjust the model and temperature settings as needed in the core.py file.
 
 Here's a sample output of the console:
 
 ```
-- Search Query (0 to Exit): FastAPI
-- Search Results for FastAPI:
-+---------+----------------------------------------------------+------------------------------------------------------------+---------------------+
-|   INDEX | TITLE                                              | URL                                                        | CREATED AT          |
-+=========+====================================================+============================================================+=====================+
-|       1 | Chat 277 - Async Chatbot Solution.                 | https://chatgpt.com/c/800693d5-9715-4bf9-9d08-251126da782c | 2023-08-02 00:25:25 |
-+---------+----------------------------------------------------+------------------------------------------------------------+---------------------+
-|       2 | Chat 278 - FastAPI, Flask, and concurrency.        | https://chatgpt.com/c/9354259f-99e3-4aa7-bef7-b53fe30965a1 | 2023-08-02 01:02:01 |
-+---------+----------------------------------------------------+------------------------------------------------------------+---------------------+
-|       3 | Chat 1422 - Uvicorn: ASGI Server Implementation    | https://chatgpt.com/c/f5394fec-28fc-4f57-aea6-994b3d165298 | 2024-04-28 23:31:55 |
-+---------+----------------------------------------------------+------------------------------------------------------------+---------------------+
-- Index to Continue With (0 to Exit): 2
+- Search Query (0 to Exit): chromedriver update and install on ubuntu server
+- Page Size (Default: 10): 3
+- Search Results for 'chromedriver update and install on ubuntu server':
++---------+-----------------------------------------+---------------------+------------------------------------------------------------+
+|   INDEX | TITLE                                   | CREATED AT          | URL                                                        |
++=========+=========================================+=====================+============================================================+
+|       1 | Migrating Project to Ubuntu             | 2023-06-14 11:00:57 | https://chatgpt.com/c/291a78b1-7b23-474c-96c2-e123c2712263 |
++---------+-----------------------------------------+---------------------+------------------------------------------------------------+
+|       2 | Using Browserless.io on Ubuntu Server   | 2023-08-02 01:02:01 | https://chatgpt.com/c/911424e0-3b94-4b89-8528-3e27c7b3fceb |
++---------+-----------------------------------------+---------------------+------------------------------------------------------------+
+|       3 | ChromeDriver Error: Unexpected Argument | 2024-04-28 23:31:55 | https://chatgpt.com/c/6259c441-f5c9-493d-b49c-87d2525afeb9 |
++---------+-----------------------------------------+---------------------+------------------------------------------------------------+
 
-Chat Title: Chat 278 - FastAPI, Flask, and concurrency.
+- Index to Continue Chat With (0 to Return): : 1
+
+
+- Title: Migrating Project to Ubuntu -
+- Length: 51 Messages - Context: 13109 Tokens -
+- API Input Cost: ~$0.0655+ Per Prompt Using gpt-4o Model -
+- ChatGPT URL: https://chatgpt.com/c/800693d5-9715-4bf9-9d08-251126da782c -
+
 
 - User: ...
+-----
 - Assistant: ...
 .
 .
 .
-
-- User (0 to Exit): Can you explain further about the differences between FastAPI and Flask?
-- Context Has 9236 Tokens - API Input Cost: ~$0.0046 - Proceed? (y/n): y
-
-Assistant: ...
+-----
+- User (0 to Return): Okay, got it fixed. One more thing, can you elaborate more on the process of updating ChromeDriver on Ubuntu?
+-----
+- Assistant: ...
 ```
