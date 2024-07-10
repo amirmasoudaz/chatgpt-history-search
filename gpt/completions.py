@@ -6,7 +6,6 @@ from dotenv import find_dotenv, get_key
 from openai import AsyncOpenAI
 
 from gpt.limiter import Limiter
-from gpt.streamer import Streamer
 from gpt.tokenizer import Tokenizer
 from gpt.models import models
 
@@ -39,28 +38,28 @@ class OpenAICompletions:
         self._limiter = Limiter(self.specs)
         self.tokenizer = Tokenizer(self.specs)
 
-    async def _stream(self, session: aiohttp.ClientSession, params: dict, channel: str) -> dict:
+    async def _stream(self, params: dict) -> dict:
         """
-        Streams the response from the OpenAI model to the Pusher channel
+        Streams the response from the OpenAI model
 
         :param params: parameters used to generate the response
-        :param channel: Pusher channel to stream the response
 
         :return: dictionary of the response information
         """
         output, usage, status, error = "", {}, 500, "INCOMPLETE"
-
-        streamer = Streamer(session=session, channel=channel)
         listener = await self._openai.chat.completions.create(
             model=params["model"],
             messages=params["messages"],
             temperature=params["temperature"],
             max_tokens=params["max_tokens"],
-            response_format={"type": params["response_format"]["type"]},
-            stream_options={"include_usage": True},
+            response_format={
+                "type": params["response_format"]["type"]
+            },
+            stream_options={
+                "include_usage": True
+            },
             stream=True)
 
-        await streamer.push_event('new-response', "")
         async for chunk in listener:
             if not chunk.choices and chunk.usage:
                 usage = dict(chunk.usage)
@@ -68,9 +67,8 @@ class OpenAICompletions:
                 break
             token = chunk.choices[0].delta.content
             if token is not None:
-                await streamer.push_event('new-token', token)
                 output += token
-        await streamer.push_event('response-finished', error)
+                print(token)
 
         return {
             "output": output,
@@ -145,7 +143,7 @@ class OpenAICompletions:
 
         await self._limiter.limit(tokens=self.tokenizer.count_tokens(context), requests=1)
         if stream and channel:
-            response = await self._stream(session, params, channel)
+            response = await self._stream(params)
         else:
             response = await self._post(session, params)
 
