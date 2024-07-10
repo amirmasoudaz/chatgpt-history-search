@@ -167,14 +167,3 @@ class OpenAICompletions:
             })
 
         return response
-
-    async def send_data_ids(self, data: dict, session: aiohttp.ClientSession, channel: str) -> dict:
-        """
-        Sends the data to the OpenAI Chat model
-
-        :param data: dictionary of data to send
-        :param session: aiohttp session
-        :param channel: pusher channel to stream the response
-
-        :return: dictionary of the response information
-        """
