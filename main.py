@@ -7,13 +7,45 @@ import pandas as pd
 from scipy.spatial.distance import cosine as cosine_similarity
 from tabulate import tabulate
 
-from core import Core
-from utilities.helpers import justified_print
+from gpt.client import OpenAI
+
+from helpers.files import FileTools
+from helpers.ledger import Ledger
 
 
-class ChatGPTSearchEngine(Core):
+class ChatGPTSearchEngine:
     def __init__(self):
-        super().__init__()
+        self._paths = Ledger().paths
+        self._configs = Ledger().configs
+
+        self._completions = OpenAI(self._configs["chat_model"], self._paths["dirs"]["vector_cache"])
+        self._embeddings = OpenAI(self._configs["embedding_model"], self._paths["dirs"]["vector_cache"])
+        self.file_tools = FileTools()
+
+        self.msg_to_ignore = []
+        self.indexed_data = {}
+        self.vector_cache = {}
+        self.search_cache = {}
+        self.vector_data = None
+
+    @staticmethod
+    def justified_print(text, length_thr=120):
+        lines = text.split('\n')
+
+        for line in lines:
+            words = line.split()
+            current_line = ""
+            for word in words:
+                if len(current_line) + len(word) + 1 > length_thr:
+                    print(current_line)
+                    current_line = word + " "
+                else:
+                    current_line += word + " "
+
+            if current_line:
+                print(current_line.rstrip())
+            else:
+                print()
 
     @staticmethod
     def generate_hash(text):
@@ -31,7 +63,7 @@ class ChatGPTSearchEngine(Core):
                     content['language'] = 'python' if message['recipient'] == 'python' else 'code'
                 text = f"Code Snippet: {content['language']}\n\n{content['text']}"
             elif content_type == 'execution_output':
-                text = f"Execution Output: {content["text"]}"
+                text = f"Execution Output: {content['text']}"
             elif content_type in ['tether_browsing_display', 'tether_quote']:
                 if message['metadata'].get('command') == 'context_stuff':
                     text = f"Context Stuff\n\nTitle: {content['domain']}\n\n{content['text']}"
@@ -57,15 +89,15 @@ class ChatGPTSearchEngine(Core):
                 print(f"Unknown message content type: {content_type}")
                 return ''
 
-            if not text or len(text) < self.IGNORE_THRESHOLD:
+            if not text or len(text) < self._configs["ignore_threshold"]:
                 return ''
 
             return text
 
         def get_chunks():
-            breaklimit, overlap = self.CHUNK_BREAK_LINE, self.CHUNK_TRIM_OVERLAP
+            breaklimit, overlap = self._configs["chunk_break_line"], self._configs["chunk_trim_overlap"]
             try:
-                tokenized = self.gpt_client.calculator.tokenize(message_content)
+                tokenized = self._embeddings.client.tokenizer.tokenize(message_content)
                 n_tokens = len(tokenized)
                 n_segments = max(1, round(n_tokens / breaklimit))
 
@@ -83,12 +115,12 @@ class ChatGPTSearchEngine(Core):
                     segments[-2].extend(segments[-1])
                     segments.pop()
 
-                return [self.gpt_client.calculator.stringify(segment) for segment in segments]
+                return [self._embeddings.client.tokenizer.stringify(segment) for segment in segments]
             except Exception as e:
                 print(f"Error processing text: {e}")
                 return [message_content]
 
-        msg_cache = await self.file_tools.read_json_async(self.paths["file"]["msg_cache"], default={})
+        msg_cache = await self.file_tools.read_json_async(self._paths["files"]["msg_cache"], default={})
         for conversation in exported[::-1]:
             conversation_id = conversation.get("conversation_id")
             if not conversation_id:
@@ -146,7 +178,7 @@ class ChatGPTSearchEngine(Core):
                 })
 
             if not messages:
-                self.digestion_info["to_ignore"].append(conversation_id)
+                self.msg_to_ignore.append(conversation_id)
                 continue
 
             total_raw_messages = len(conversation["mapping"].values())
@@ -167,7 +199,7 @@ class ChatGPTSearchEngine(Core):
 
     async def generate_embeddings(self, msg_cache):
         tokens = []
-        vector_cache = await self.file_tools.read_json_async(self.paths["file"]["vector_cache"], default={})
+        vector_cache = await self.file_tools.read_json_async(self._paths["files"]["vector_cache"], default={})
         for msg_hash, msg in msg_cache.items():
             if msg.get("embedding"):
                 continue
@@ -175,26 +207,23 @@ class ChatGPTSearchEngine(Core):
                 if vector_cache.get(msg_hash) and vector_cache[msg_hash].get("output"):
                     msg["embedding"] = vector_cache[msg_hash]["output"]
                 else:
-                    self.gpt_client.add_request(
-                        context=msg["content"],
-                        identifier=msg_hash,
-                        engine="embedding")
-                    tokens.append(self.gpt_client.calculator.count_tokens(msg["content"]))
+                    self._embeddings.add_get_response(context=msg["content"], identifier=msg_hash)
+                    tokens.append(self._embeddings.client.tokenizer.count_tokens(msg["content"]))
 
         if not tokens:
             print(f"- No New API Calls Required - Data Already Cached -")
         else:
             print(f"- New API Calls: {len(tokens)} - Tokens: {sum(tokens)} -", end=" ")
-            print(f"Cost: ${round(sum(tokens) / 1000 * self.gpt_client.embedding_model['cost']['input'], 4)} -", end=" ")
-            print(f"Model: {self.gpt_client.embedding_model['name']} -", end=" ")
-            results = await self.gpt_client.trigger_requests()
+            print(f"Cost: ${round(sum(tokens) / 1000 * self._embeddings.client.model_specs['cost']['input'], 4)} -", end=" ")
+            print(f"Model: {self._embeddings.model_name} -", end=" ")
+            results = await self._embeddings.batch_get_response()
             print("Fetched Successfully -")
 
             if results:
                 for result in results:
                     if result["output"]:
                         msg_cache[result["identifier"]]["embedding"] = result["output"]
-                        os.remove(os.path.join(self.paths["dir"]["vector_cache"], f"{result['identifier']}.json"))
+                        os.remove(os.path.join(self._paths["dirs"]["vector_cache"], f"{result['identifier']}.json"))
                         vector_cache[result["identifier"]] = result
                     else:
                         print(f"- Failed to Embed: {result['identifier']}")
@@ -208,11 +237,7 @@ class ChatGPTSearchEngine(Core):
         if identifier in self.search_cache:
             return self.search_cache[identifier]
 
-        result = await self.gpt_client.call_model(
-            context=query,
-            identifier=identifier,
-            engine="embedding")
-
+        result = await self._embeddings.get_response(context=query, identifier=identifier)
         data = [
             (row["addresses"], row["hash"], 1 - cosine_similarity(result["output"], row["embedding"]))
             for i, row in self.vector_data.iterrows()
@@ -230,25 +255,25 @@ class ChatGPTSearchEngine(Core):
                 break
 
         self.search_cache[identifier]["results"] = result_addresses[:limit]
-        file_path = os.path.join(self.paths["dir"]["search_cache"], f"{identifier}.json")
+        file_path = os.path.join(self._paths["dirs"]["search_cache"], f"{identifier}.json")
         self.file_tools.write_json(file_path, self.search_cache[identifier])
 
         return self.search_cache[identifier]
 
     async def prep_logic(self):
-        self.digestion_info = await self.file_tools.read_json_async(self.paths["file"]["digestion_info"], default=self.digestion_info)
-        self.indexed_data = await self.file_tools.read_json_async(self.paths["file"]["index"], default=self.indexed_data)
-        self.vector_data = self.file_tools.read_df(self.paths["file"]["vector_data"], dtype="pkl", default=self.vector_data)
-        self.search_cache = await self.file_tools.read_dir_contents_async(self.paths["dir"]["search_cache"], dtype="json", default=self.search_cache)
+        self.msg_to_ignore = await self.file_tools.read_json_async(self._paths["files"]["msg_to_ignore"], default=self.msg_to_ignore)
+        self.indexed_data = await self.file_tools.read_json_async(self._paths["files"]["index"], default=self.indexed_data)
+        self.vector_data = self.file_tools.read_df(self._paths["files"]["vector_data"], dtype="pkl", default=self.vector_data)
+        self.search_cache = await self.file_tools.read_dir_contents_async(self._paths["dirs"]["search_cache"], dtype="json", default=self.search_cache)
 
-        exported = await self.file_tools.read_json_async(self.paths["file"]["exported"], default={})
+        exported = await self.file_tools.read_json_async(self._paths["files"]["exported"], default={})
         if not self.indexed_data and not exported:
-            raise FileNotFoundError(f"- Exported JSON File Not Found - Path: {self.paths["file"]["exported"]}")
+            raise FileNotFoundError(f"- Exported JSON File Not Found - Path: {self._paths['files']['exported']}")
 
         updates = []
         for conversation in exported:
             conversation_id = conversation.get("conversation_id")
-            if not conversation_id or conversation_id in self.digestion_info["to_ignore"]:
+            if not conversation_id or conversation_id in self.msg_to_ignore:
                 continue
 
             if not self.indexed_data.get(conversation_id):
@@ -264,11 +289,11 @@ class ChatGPTSearchEngine(Core):
             self.vector_data, vector_cache = await self.generate_embeddings(msg_cache=msg_cache)
 
             print(f"- Finalizing and Storing Processed Data -", end=" ")
-            self.file_tools.write_json(self.paths["file"]["index"], self.indexed_data)
-            self.file_tools.write_json(self.paths["file"]["msg_cache"], msg_cache)
-            self.file_tools.write_json(self.paths["file"]["vector_cache"], vector_cache)
-            self.file_tools.write_df(self.paths["file"]["vector_data"], self.vector_data, dtype="pkl")
-            self.file_tools.write_json(self.paths["file"]["digestion_info"], self.digestion_info)
+            self.file_tools.write_json(self._paths["files"]["index"], self.indexed_data)
+            self.file_tools.write_json(self._paths["files"]["msg_cache"], msg_cache)
+            self.file_tools.write_json(self._paths["files"]["vector_cache"], vector_cache)
+            self.file_tools.write_df(self._paths["files"]["vector_data"], self.vector_data, dtype="pkl")
+            self.file_tools.write_json(self._paths["files"]["msg_to_ignore"], self.msg_to_ignore)
             print(f"Done -")
 
     async def chat_logic(self, results, result_index, identifier):
@@ -282,13 +307,13 @@ class ChatGPTSearchEngine(Core):
             context_str += f"- {message['context']['role'].title()}: {message['context']['content']}\n\n-----\n\n"
             context_list.append(message['context'])
 
-        token_count = self.gpt_client.calculator.count_tokens(context_list)
-        cost = round(token_count / 1000 * self.gpt_client.chat_model['cost']['input'], 4)
-        print(f"\n\n- {context["conversation_title"]} -")
+        token_count = self._completions.client.tokenizer.count_tokens(context_list)
+        cost = round(token_count / 1000 * self._completions.client.specs['cost']['input'], 4)
+        print(f"\n\n- {context['conversation_title']} -")
         print(f"- Length: {len(context['messages'])} Messages - Length: {token_count} Tokens -")
-        print(f"- API Input Cost: ~${cost}+ Per Prompt Using {self.gpt_client.chat_model['name']} Model -")
+        print(f"- API Input Cost: ~${cost}+ Per Prompt Using {self._completions.model_name} Model -")
         print(f"- ChatGPT URL: {context['conversation_url']} -\n\n")
-        justified_print(context_str[:-1])
+        self.justified_print(context_str[:-1])
 
         while True:
             user_query = input("- User (0 to Return): ")
@@ -296,30 +321,27 @@ class ChatGPTSearchEngine(Core):
                 break
             context_list.append({"role": "user", "content": user_query})
 
-            response = await self.gpt_client.call_model(
-                engine="chat",
-                context=context_list,
-                identifier=identifier,
-                temperature=self.CHAT_TEMPERATURE)
+            response = await self._completions.get_response(context=context_list, identifier=identifier)
 
             context_list.append({"role": "assistant", "content": response["output"]})
-            justified_print(f"\n-----\n\n- Assistant: {response["output"]}")
+            self.justified_print(f"\n-----\n\n- Assistant: {response['output']}")
             self.indexed_data[conversation_title]["messages"].extend([context_list[-2], context_list[-1]])
 
         # Add the new messages into the index and generate embeddings
-        self.file_tools.write_json(self.paths["file"]["index"], self.indexed_data)
+        self.file_tools.write_json(self._paths["files"]["index"], self.indexed_data)
 
     async def search_logic(self):
-        self.gpt_client.cache_dir = self.paths["dir"]["search_cache"]
+        self._completions.backlogs_dir = self._paths["dirs"]["search_cache"]
+        self._embeddings.backlogs_dir = self._paths["dirs"]["search_cache"]
 
         while True:
             query = input("- Search Query (0 to Exit): ")
             if query == "0":
                 break
             try:
-                page_size = int(input("- Page Size (Default: 10): ") or self.SEARCH_LIMIT)
+                page_size = int(input("- Page Size (Default: 10): ") or self._configs["search_limit"])
             except ValueError:
-                page_size = self.SEARCH_LIMIT
+                page_size = self._configs["search_limit"]
 
             identifier = self.generate_hash(query)
             results = await self.search(query, identifier, limit=page_size)

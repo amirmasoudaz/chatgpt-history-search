@@ -7,8 +7,10 @@ import pandas as pd
 
 
 class FileTools:
-    def __init__(self, max_concurrent_files=100):
-        self.semaphore = asyncio.Semaphore(max_concurrent_files)
+    semaphore = asyncio.Semaphore(100)
+
+    def __init__(self):
+        pass
 
     def read_dir_contents(self, path: str, dtype: str = "json", default=None) -> dict:
         """
@@ -213,6 +215,7 @@ class FileTools:
 
         :return: None
         """
+
         if not path.endswith(".json"):
             path += ".json"
 
@@ -252,6 +255,7 @@ class FileTools:
 
         :return: None
         """
+
         if not path.endswith(".json"):
             path += ".json"
 
