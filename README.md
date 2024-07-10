@@ -21,9 +21,9 @@ This Python project creates a search engine for OpenAI's ChatGPT conversation hi
    - Extract the `conversations.json` from the zip file and place it in the `data/exported` directory within the project.
 
 3. **Add OpenAI API key for API access:**
-   Add your OpenAI API key to the `.env` file:
+   Add your OpenAI API key to the `keys.env` file:
    ```bash
-   OPENAI_API_KEY=your_openai_api_key
+   API_KEY_OPENAI=your_openai_api_key
    ```
 
 4. **Run the program:**
