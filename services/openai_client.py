@@ -1,4 +1,4 @@
-# src/utils/gpt.py
+# services/openai_client.py
 
 import asyncio
 import json
